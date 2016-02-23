@@ -1,3 +1,6 @@
 models/*
 *.pyc
+<<<<<<< HEAD
 ec2_gpu_round3.pem
+=======
+>>>>>>> 800df26d468feb548ed5c654e4e7f44de83b19cb
