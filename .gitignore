@@ -1,2 +1,3 @@
 models/*
 *.pyc
+ec2_gpu_round3.pem
