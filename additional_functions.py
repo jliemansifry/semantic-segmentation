@@ -3,7 +3,10 @@ from keras.models import model_from_json
 from PIL import Image, ImageOps
 from scipy.misc import imread, imsave
 from keras.utils import np_utils
+from keras_classifier import compile_model, set_basic_model_param
 import cv2
+import theano
+import h5py
 
 
 def load_model(path_to_model):
@@ -12,12 +15,41 @@ def load_model(path_to_model):
                 not including .json or .h5 at the end
     OUTPUT: (1) Trained and compiled Keras model
     '''
-    json_file_name = '{}.json'.format(path_to_model)
+    #json_file_name = '{}.json'.format(path_to_model)
     weights_file_name = '{}.h5'.format(path_to_model)
-    model = model_from_json(open(json_file_name).read())
-    model.load_weights(weights_file_name)
+    weights_file = h5py.File(weights_file_name)
+    model_param = set_basic_model_param()
+    model = compile_model(model_param, segmentation=True)
+    for k in range(weights_file.attrs['nb_layers']):
+        print k
+        if k >= len(model.layers)-2:
+            break
+        g = weights_file['layer_{}'.format(k)]
+        weights = [g['param_{}'.format(p)]
+                   for p in range(g.attrs['nb_params'])]
+        model.layers[k].set_weights(weights)
+    weights_file.close()
+    #model = model_from_json(open(json_file_name).read())
+    #model.load_weights(weights_file_name)
     model.compile(loss='categorical_crossentropy', optimizer='adadelta')
     return model
+
+
+def probas_tensor_to_pixelwise_prediction(model, X_sub):
+    y_pred = model.predict(X_sub)
+    pixelwise_prediction = np.argmax(y_pred[0, :, :, :], axis=0)
+    class_to_color = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
+    pixelwise_color = np.zeros((64, 64, 3))
+    for class_num in range(len(class_to_color)):
+        class_color = class_to_color[class_num]
+        class_locs = np.where(pixelwise_prediction == class_num)
+        class_locs_Xdim = class_locs[0]
+        class_locs_Ydim = class_locs[1]
+        for RGB_idx in range(3):
+            pixelwise_color[class_locs_Xdim, 
+                            class_locs_Ydim,
+                            RGB_idx] = class_color[RGB_idx]/255.
+    return pixelwise_prediction, pixelwise_color
 
 
 def pixelwise_prediction(model, X_test_img_filename, y_test_img_filename, sub_im_width=64):
@@ -33,8 +65,8 @@ def pixelwise_prediction(model, X_test_img_filename, y_test_img_filename, sub_im
                                        offset, offset, offset, offset,
                                        cv2.BORDER_CONSTANT, value=(0,0,0))
     y_pred_img = np.zeros((400, usable_width, 3))
-    h_start_pxs = np.arange(0, usable_width)
-    w_start_pxs = np.arange(0, usable_height)
+    h_start_pxs = np.arange(0, usable_height)
+    w_start_pxs = np.arange(0, usable_width)
     y_true = np.zeros((usable_width*usable_height))
     color_to_class = {(0, 0, 0): 0, (0, 0, 255): 1, (0, 255, 0): 2}  # 0: background; 1: water; 2: road
     class_to_color = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
@@ -61,6 +93,26 @@ def pixelwise_prediction(model, X_test_img_filename, y_test_img_filename, sub_im
                       for i in range(len(class_to_color))}
     return X_with_border, y_with_border, y_pred_img, classwise_accs
 
+
+
+def get_activations(model, layer, X_batch):
+    '''
+    INPUT:  (1) Keras Sequential model object
+            (2) integer: The layer to extract weights from
+            (3) 4D numpy array: All the X data you wish to extract
+                activations for
+    OUTPUT: (1) numpy array: Activations for that layer
+    '''
+    input_layer = model.layers[0].input
+    specified_layer_output = model.layers[layer].get_output(train=False)
+    get_activations = theano.function([input_layer],
+                                      specified_layer_output,
+                                      allow_input_downcast=True)
+    activations = get_activations(X_batch)
+    return activations
+
+
 if __name__ == '__main__':
-    model = load_model('models/KerasBaseModel_v.0.1')
-    Xti, yti, ypi, classwise_accs = pixelwise_prediction(model, 'data/lat_28.26229,long_-81.3301_satellite.png', 'data/lat_28.26229,long_-81.3301_segmented.png')
+    #pass
+    model = load_model('models/KerasBaseModel_v.0.1_nopool')
+    #Xti, yti, ypi, classwise_accs = pixelwise_prediction(model, 'data/lat_28.26229,long_-81.3301_satellite.png', 'data/lat_28.26229,long_-81.3301_segmented.png')
