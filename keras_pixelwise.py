@@ -16,7 +16,17 @@ import theano.tensor as T
 import pickle
 
 
-def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=64):
+def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=16):
+    ''' 
+    INPUT:  (1) string of the directory where satellite and segmented images
+                are located
+            (2) int: height of image; this fn is optimized for 640px
+            (3) int: width of image
+            (4) int: width of the subsampled image
+            (5) int: how many pixels to move by when subsampling image
+    OUTPUT: (1)
+    
+    '''
     all_image_filenames = os.listdir(data_dir)
     satellite_filenames = [f for f in all_image_filenames if 'satellite' in f]
     segmented_filenames = [f for f in all_image_filenames if 'segmented' in f]
@@ -54,9 +64,10 @@ def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=64):
                             other_locs[1],
                             other_locs[2],
                             0] = 1
-    del all_class_data_as_RGB    
+    del all_class_data_as_RGB
+    del locs
+    del other_locs
     print 'Done. \nSubsetting image data...'
-    #offset = sub_im_width/2.  # Need to start where subset image frame will fill
     h_start_pxs = np.arange(0, h-sub_im_width+1, sample_stride)
     w_start_pxs = np.arange(0, w-sub_im_width+1, sample_stride)
     total_num_subsampled_img = total_num_img * len(h_start_pxs) * len(w_start_pxs)
@@ -87,7 +98,7 @@ def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=64):
     X = X.reshape(num_all_img, 3, sub_im_width, sub_im_width)
     y = y.reshape(num_all_img, sub_im_width**2, 3)
     print 'Done.'
-    return X, y #, X_train, y_train, X_test, y_test
+    return X, y
 
 
 def set_basic_model_param():
@@ -124,31 +135,23 @@ def compile_model(model_param):
     '''
     print 'Compiling model...'
     model = Sequential()
-    #input_img = K.placeholder((1, 3, model_param['n_cols'], model_param['n_rows']))
-    #input_placeholder = T.tensor4()
     model_param_to_add = [ZeroPadding2D((1, 1),
                                         input_shape=(model_param['n_chan'],
                                                     model_param['n_rows'],
                                                     model_param['n_cols'])),
-                          #input_placeholder,
-                          Convolution2D(model_param['n_conv_nodes'],
+                          Convolution2D(model_param['n_conv_nodes']/8,
                                         model_param['conv_size'],
-                                        model_param['conv_size']),#,#,
-                                        # border_mode='valid',
-                                        # input_shape=(model_param['n_chan'],
-                                                    # model_param['n_rows'],
-                                                    # model_param['n_cols'])),
+                                        model_param['conv_size']),
                           Activation('relu'),
-                          #ZeroPadding2D((1, 1)),
                           ZeroPadding2D((1, 1)),
-                          Convolution2D(model_param['n_conv_nodes'],
+                          Convolution2D(model_param['n_conv_nodes']/4,
                                         model_param['conv_size'],
                                         model_param['conv_size']),
                           Activation('relu'),
                           ZeroPadding2D((1, 1)),
                           # MaxPooling2D(pool_size=(model_param['pool_size'],
                                                   # model_param['pool_size'])),
-                          Convolution2D(model_param['n_conv_nodes'], 
+                          Convolution2D(model_param['n_conv_nodes']/2, 
                                         model_param['conv_size'],
                                         model_param['conv_size']),
                           Activation('relu'),
@@ -210,6 +213,6 @@ def fit_and_save_model(model, model_param, X, y):
 
 if __name__ == '__main__':
     X, y = load_data('dataselected')
-    model_param = set_basic_model_param()
-    model = compile_model(model_param)
-    fit_and_save_model(model, model_param, X, y)
+    # model_param = set_basic_model_param()
+    # model = compile_model(model_param)
+    # fit_and_save_model(model, model_param, X, y)
