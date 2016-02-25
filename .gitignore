@@ -1,3 +1,4 @@
 models/*
 *.pyc
 *.pem
+image_scraper_private.py
