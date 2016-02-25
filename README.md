@@ -1,4 +1,4 @@
-# Super Simple Semantic Segmentation
+# Semantic Segmentation
 
 CNNs for pixel-by-pixel prediction on satellite imagery. A work in progress.
 
