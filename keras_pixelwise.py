@@ -16,32 +16,50 @@ import theano.tensor as T
 import pickle
 
 
-def load_data(lats, lngs, h=400, w=640, sub_im_width=64, sample_stride=4, equal_classes=False):
-    usable_height = 380
-    usable_width = 640
-    total_num_img = len(lats) * (len(lngs))
-    all_satellite_data = np.zeros((total_num_img, usable_height, usable_width, 3), dtype=np.uint8)
-    all_class_data = np.zeros((total_num_img, usable_height, usable_width, 3), dtype=np.uint8)
-    classes = {(0, 0, 0): 0, (0, 0, 255): 1, (0, 255, 0): 2}  # 0: background; 1: water; 2: road
+def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=64):
+    all_image_filenames = os.listdir(data_dir)
+    satellite_filenames = [f for f in all_image_filenames if 'satellite' in f]
+    segmented_filenames = [f for f in all_image_filenames if 'segmented' in f]
+    total_num_img = len(satellite_filenames)
+    all_satellite_data = np.zeros((total_num_img, h, w, 3), dtype=np.uint8)
+    all_class_data_as_RGB= np.zeros((total_num_img, h, w, 3), dtype=np.uint8)
+    all_class_data_as_class = np.zeros((total_num_img, h, w, 1), dtype=np.uint8)
+    colors_to_classes = {(0, 0, 0): 0, (0, 0, 255): 1, (0, 255, 0): 2}  # 0: background; 1: water; 2: road
+    classes_to_colors = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
     idx_to_write = 0
-    ### Load all image data ###
     print 'Loading image data...'
-    for lat in lats:
-        for lng in lngs:
-            base_filename = 'data/lat_{},long_{}'.format(str(lat)[:8], str(lng)[:8])
-            satellite_data = imread('{}_satellite.png'.format(base_filename))[:usable_height]
-            class_data = imread('{}_segmented.png'.format(base_filename))[:usable_height]
-            all_satellite_data[idx_to_write] = satellite_data
-            all_class_data[idx_to_write] = class_data
-            idx_to_write += 1
+    for idx, satellite_filename in enumerate(satellite_filenames):
+        satellite_img = imread('{}/{}'.format(data_dir, satellite_filename))
+        all_satellite_data[idx] = satellite_img
+    for idx, segmented_filename in enumerate(segmented_filenames):
+        segmented_img = imread('{}/{}'.format(data_dir, segmented_filename))
+        all_class_data_as_RGB[idx] = segmented_img
+    for RGB_color in [(0, 0, 255), (0, 255, 0)]:
+        for img_idx in range(total_num_img):
+            print 'Done. \nFinding pixelwise classes from pixel color for image {}'.format(img_idx)
+            locs = np.where(np.logical_and(
+                        (all_class_data_as_RGB[img_idx, :, :, 0] == RGB_color[0]),
+                        (all_class_data_as_RGB[img_idx, :, :, 1] == RGB_color[1]),
+                        (all_class_data_as_RGB[img_idx, :, :, 2] == RGB_color[2])))
+            print 'Done. \nWriting class data from color pixels to array...'
+            all_class_data_as_class[img_idx, 
+                                    locs[0], 
+                                    locs[1]] = colors_to_classes[RGB_color]
+            del locs
+    del all_class_data_as_RGB    
     print 'Done. \nSubsetting image data...'
-    ### Subset image data ###
-    offset = sub_im_width/2.  # Need to start where subset image frame will fill
-    h_start_pxs = np.arange(offset, usable_height-sub_im_width, sample_stride)
-    w_start_pxs = np.arange(offset, usable_width-sub_im_width, sample_stride)
-    total_num_sampled_img = total_num_img * len(h_start_pxs) * len(w_start_pxs)
-    X = np.zeros((total_num_sampled_img, sub_im_width, sub_im_width, 3), dtype=np.uint8)
-    y = np.zeros(total_num_sampled_img)
+    #offset = sub_im_width/2.  # Need to start where subset image frame will fill
+    h_start_pxs = np.arange(0, h-sub_im_width+1, sample_stride)
+    w_start_pxs = np.arange(0, w-sub_im_width+1, sample_stride)
+    total_num_subsampled_img = total_num_img * len(h_start_pxs) * len(w_start_pxs)
+    X = np.zeros((total_num_subsampled_img, 
+                  sub_im_width, 
+                  sub_im_width, 
+                  3), dtype=np.uint8)
+    y = np.zeros((total_num_subsampled_img, 
+                  sub_im_width, 
+                  sub_im_width, 
+                  3), dtype=np.uint8)
     idx_to_write = 0
     for img_idx in range(total_num_img):
         for h_start_px in h_start_pxs:
@@ -49,25 +67,11 @@ def load_data(lats, lngs, h=400, w=640, sub_im_width=64, sample_stride=4, equal_
                 h_end_px = h_start_px + sub_im_width
                 w_end_px = w_start_px + sub_im_width
                 im_subset = all_satellite_data[img_idx][h_start_px:h_end_px, w_start_px:w_end_px]
-                im_subset_rgb = all_class_data[img_idx][h_start_px+offset, w_start_px+offset]
-                cla = classes.get(tuple(im_subset_rgb), 0)
+                im_subset_as_class = all_class_data_as_class[img_idx][h_start_px:h_end_px, w_start_px:w_end_px]
                 X[idx_to_write] = im_subset
-                y[idx_to_write] = cla
+                y[idx_to_write] = im_subset_as_class
                 idx_to_write += 1
     print 'Done. \nReshaping image data...'
-    if equal_classes:
-        len_smallest_class = np.min([np.sum(y==i) for i in range(len(classes))])
-        X_eq = np.zeros((len_smallest_class*len(classes), sub_im_width, sub_im_width, 3))
-        y_eq = np.zeros(len_smallest_class*len(classes),)
-        X_by_class = [np.where(y==i)[0][:len_smallest_class] for i in range(len(classes))]
-        X_eq[::3] = X[X_by_class[0]]
-        X_eq[1::3] = X[X_by_class[1]]
-        X_eq[2::3] = X[X_by_class[2]]
-        y_eq[::3] = y[X_by_class[0]]
-        y_eq[1::3] = y[X_by_class[1]]
-        y_eq[2::3] = y[X_by_class[2]]
-        X = X_eq
-        y = y_eq
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
     num_train_img = X_train.shape[0]
     num_test_img = X_test.shape[0]
@@ -77,8 +81,8 @@ def load_data(lats, lngs, h=400, w=640, sub_im_width=64, sample_stride=4, equal_
     X_test = X_test.astype('float32')
     X_train /= 255.
     X_test /= 255.
-    y_train = np_utils.to_categorical(y_train, len(classes))
-    y_test = np_utils.to_categorical(y_test, len(classes))
+    y_train = np_utils.to_categorical(y_train, len(classes_to_colors))
+    y_test = np_utils.to_categorical(y_test, len(classes_to_colors))
     print 'Done.'
     return X_train, y_train, X_test, y_test
 
@@ -108,7 +112,7 @@ def set_basic_model_param():
     return model_param
 
 
-def compile_model(model_param, segmentation=False):
+def compile_model(model_param):
     ''' 
     INPUT:  (1) Dictionary of model parameters
     OUTPUT: (1) Compiled (but untrained) Keras model
@@ -151,29 +155,21 @@ def compile_model(model_param, segmentation=False):
                           Activation('relu'),
                           # MaxPooling2D(pool_size=(model_param['pool_size'],
                                                   # model_param['pool_size'])),
-                          Dropout(model_param['primary_dropout']),
-                          Flatten(),
-                          Dense(model_param['n_dense_nodes']),
+                          Dropout(model_param['primary_dropout']),#,
+                          Convolution2D(128, 1, 1),
                           Activation('relu'),
-                          Dropout(model_param['secondary_dropout']),
-                          Dense(model_param['n_classes']),
+                          Convolution2D(3, 1, 1),
                           Activation('softmax')]
-    if segmentation:
-        # model_param_to_add[0] = Convolution2D(model_param['n_conv_nodes'], 
-                                        # model_param['conv_size'],
-                                        # model_param['conv_size'],
-                                        # border_mode='valid',
-                                        # input_shape=(3,
-                                                     # 64,
-                                                     # 64))
-        # model_param_to_add[0] = ZeroPadding2D((1, 1),
-                                        # input_shape=(3,
-                                                    # 64,
-                                                    # 64))
-        for _ in range(7):
-            model_param_to_add.pop(-1)
-        #model_param_to_add += [Convolution2D(128, 1, 1)]#, init='uniform')]
-        model_param_to_add += [Convolution2D(3, 1, 1)]#, init='uniform')]
+                          # Flatten(),
+                          # Dense(model_param['n_dense_nodes']),
+                          # Activation('relu'),
+                          # Dropout(model_param['secondary_dropout']),
+                          # Dense(model_param['n_classes']),
+                          # Activation('softmax')]
+        # for _ in range(7):
+            # model_param_to_add.pop(-1)
+        # #model_param_to_add += [Convolution2D(128, 1, 1)]#, init='uniform')]
+        # model_param_to_add += [Convolution2D(3, 1, 1)]#, init='uniform')]
 
         #model_param_to_add += [Activation('softmax')]
         
@@ -199,6 +195,8 @@ def fit_and_save_model(model, model_param, X_train, y_train, X_test, y_test):
     '''
     print 'Fitting model...\n'
     start = time.clock()
+    def loss(y_true, y_pred):
+        pass
     early_stopping_monitor = EarlyStopping(monitor='val_loss', 
                                                            patience=0,
                                                            verbose=1)
@@ -232,11 +230,9 @@ def fit_and_save_model(model, model_param, X_train, y_train, X_test, y_test):
 
 
 if __name__ == '__main__':
-    lats = np.linspace(28.35, 28.45, 6)
-    lngs = np.linspace(-81.35, -81.45, 6)
     # sd, cd = load_data(lats, lngs)
-    X_train, y_train, X_test, y_test = load_data(lats, lngs, equal_classes=True)
+    X_train, y_train, X_test, y_test = load_data('dataselected')
     # sd, cd, X, y = load_data(lats, lngs)
-    model_param = set_basic_model_param()
-    model = compile_model(model_param)
-    fit_and_save_model(model, model_param, X_train, y_train, X_test, y_test)
+    # model_param = set_basic_model_param()
+    # model = compile_model(model_param)
+    # fit_and_save_model(model, model_param, X_train, y_train, X_test, y_test)
