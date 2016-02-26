@@ -97,8 +97,8 @@ def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=8, equal_cl
         water_img_locs = classwise_pixcount_per_img[1] > 500
         road_and_water_locs = np.logical_and(road_img_locs,
                                              water_img_locs)
-    X = X[road_and_water_locs]
-    y = y[road_and_water_locs]
+        X = X[road_and_water_locs]
+        y = y[road_and_water_locs]
     print 'Done. \nReshaping image data...'
     X = X.astype('float32')
     X /= 255.
