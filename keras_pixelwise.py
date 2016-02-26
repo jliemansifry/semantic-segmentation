@@ -16,7 +16,7 @@ import theano.tensor as T
 import pickle
 
 
-def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=16):
+def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=16, equal_classes=True):
     ''' 
     INPUT:  (1) string of the directory where satellite and segmented images
                 are located
@@ -87,6 +87,8 @@ def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=16):
                 w_end_px = w_start_px + sub_im_width
                 im_subset = all_satellite_data[img_idx][h_start_px:h_end_px, w_start_px:w_end_px]
                 im_subset_as_class = all_class_data_as_class[img_idx][h_start_px:h_end_px, w_start_px:w_end_px]
+                # classwise_counts = [np.sum(im_subset_as_class[:, :, i] == 1)
+                                            # for i in range(3)]
                 X[idx_to_write] = im_subset
                 y[idx_to_write] = im_subset_as_class
                 idx_to_write += 1
@@ -115,14 +117,14 @@ def set_basic_model_param():
                    'n_chan': 3,
                    'n_classes': 3,
                    'n_epoch': 10,
-                   'batch_size': 64,
+                   'batch_size': 1,
                    'pool_size': 2,
                    'conv_size': 3,
                    'n_conv_nodes': 128,
                    'n_dense_nodes': 128,
                    'primary_dropout': 0.25,
                    'secondary_dropout': 0.5,
-                   'model_build': 'v.0.1_nopool_pixelwise'} #_{}'.format(model_info)}
+                   'model_build': 'v.0.1_nopool_pixelwise_zoom14_superselected'} #_{}'.format(model_info)}
     return model_param
 
 
@@ -212,7 +214,7 @@ def fit_and_save_model(model, model_param, X, y):
 
 
 if __name__ == '__main__':
-    X, y = load_data('dataselected')
-    # model_param = set_basic_model_param()
-    # model = compile_model(model_param)
-    # fit_and_save_model(model, model_param, X, y)
+    X, y = load_data('data640x640zoom15', equal_classes=False)
+    model_param = set_basic_model_param()
+    model = compile_model(model_param)
+    fit_and_save_model(model, model_param, X, y)
