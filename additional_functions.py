@@ -9,6 +9,8 @@ import cv2
 import theano
 import h5py
 from scipy.ndimage.filters import median_filter, maximum_filter
+import matplotlib.gridspec as gridspec
+import pylab
 
 def load_model(path_to_model):
     ''' 
@@ -24,11 +26,11 @@ def load_model(path_to_model):
     return model
 
 
-def probas_tensor_to_pixelwise_prediction(model, X_sub):
-    y_pred = model.predict(X_sub/255.).reshape((1, 64, 64, 3))
+def probas_tensor_to_pixelwise_prediction(model, X_sub, sub_im_width):
+    y_pred = model.predict(X_sub/255.).reshape((1, sub_im_width, sub_im_width, 3))
     pixelwise_prediction = np.argmax(y_pred[0, :, :, :], axis=2)
     class_to_color = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
-    pixelwise_color = np.zeros((64, 64, 3))
+    pixelwise_color = np.zeros((sub_im_width, sub_im_width, 3))
     for class_num in range(3):
         class_color = class_to_color[class_num]
         class_locs = np.where(pixelwise_prediction == class_num)
@@ -41,6 +43,27 @@ def probas_tensor_to_pixelwise_prediction(model, X_sub):
     return pixelwise_prediction, pixelwise_color
 
 
+def show_me_centerpix_img(X, y, class_idx):
+    ''' Assuming y is categorical'''
+    fig = plt.figure(figsize=(10, 10))
+    outer_grid = gridspec.GridSpec(10, 10, wspace=0.0, hspace=0.0)
+    pylab.xticks([])
+    pylab.yticks([])
+    def plotcmd(ax, img):
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.set_xticks([])
+        ax.set_yticks([])
+        plt.imshow(img)
+    class_locs = np.where(y[:,class_idx]==1)[0]
+    imgs = X[class_locs][:100]
+    for idx, img in enumerate(imgs):
+        ax = plt.Subplot(fig, outer_grid[idx])
+        plotcmd(ax, img)
+        fig.add_subplot(ax)
+    plt.show()
+
+
 def apply_filter(filename, typ='median'):
     img = imread(filename)
     if typ == 'median':
@@ -49,14 +72,14 @@ def apply_filter(filename, typ='median'):
         return maximum_filter(img, 2)
 
 
-def pixelwise_prediction(model, X_test_img_filename, y_test_img_filename, h=640, w=640, sub_im_width=64):
+def pixelwise_prediction(model, X_test_img_filename, y_test_img_filename, h=640, w=640, sub_im_width=128):
     imwidth = 640
     # offset = int(sub_im_width/2.)
     X_test_img = imread(X_test_img_filename)
     y_test_img = imread(y_test_img_filename)
     y_pred_img = np.zeros((imwidth, imwidth, 3))
-    h_start_pxs = np.arange(0, imwidth, 64)
-    w_start_pxs = np.arange(0, imwidth, 64)
+    h_start_pxs = np.arange(0, imwidth, sub_im_width)
+    w_start_pxs = np.arange(0, imwidth, sub_im_width)
     color_to_class = {(0, 0, 0): 0, (0, 0, 255): 1, (0, 255, 0): 2}  # 0: background; 1: water; 2: road
     # class_to_color = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
     idx_to_write = 0
@@ -72,7 +95,7 @@ def pixelwise_prediction(model, X_test_img_filename, y_test_img_filename, h=640,
             #im_subset_rgb = y_test_img[h_start_px+offset, w_start_px+offset]
             #y_true_temp = color_to_class.get(tuple(im_subset_rgb))
             #y_pred = model.predict_classes(im_subset, verbose=0)
-            pixelwise_prediction, pixelwise_color = probas_tensor_to_pixelwise_prediction(model, im_subset)
+            pixelwise_prediction, pixelwise_color = probas_tensor_to_pixelwise_prediction(model, im_subset, sub_im_width)
             y_pred_img[h_start_px:h_end_px, w_start_px:w_end_px] = pixelwise_color
             # if y_true_temp == y_pred:
                 # classwise_correct[y_true_temp] += 1
@@ -80,8 +103,8 @@ def pixelwise_prediction(model, X_test_img_filename, y_test_img_filename, h=640,
             #color_to_write = class_to_color[y_pred[0]]
             #y_pred_img[h_start_px, w_start_px] = color_to_write
             idx_to_write +=1
-    plt.imshow(y_pred_img)
-    plt.show()
+    # plt.imshow(y_pred_img)
+    # plt.show()
     print 'saving at {}_pred.png'.format(y_test_img_filename[:-4])
     imsave('{}_pred.png'.format(y_test_img_filename[:-4]), y_pred_img)
     # classwise_accs = {i: (classwise_correct[i]/float(len(y_true==1)))
@@ -108,5 +131,5 @@ def get_activations(model, layer, X_batch):
 
 
 if __name__ == '__main__':
-    model = load_model('models/KerasBaseModel_v.0.1_nopool_pixelwise')
-    pixelwise_prediction(model, 'data640x640/lat_27.5,long_-81.455_satellite.png', 'data640x640/lat_27.5,long_-81.455_segmented.png')
+    model = load_model('models/KerasBaseModel_v.0.1_128x128_nopool_512nodes_growing_nodrop_pixelwise_zoom18_no12811conv')
+    pixelwise_prediction(model, 'data640x640zoom18/lat_28.48830,long_-81.5087_satellite.png', 'data640x640zoom18/lat_28.48830,long_-81.5087_segmented.png')
