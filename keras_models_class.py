@@ -118,7 +118,7 @@ class keras_models(object):
             all_class_data_as_class[other_locs[0],
                                     other_locs[1],
                                     other_locs[2],
-                                    0] = 3
+                                    0] = 3  # set as background
         ### LOAD Xy ###
         def load_Xy(centerpix_or_pixelwise):
             def pixelwise_y_loader():
@@ -128,12 +128,6 @@ class keras_models(object):
                 centerpix_h = int(h_start_px + self.offset)
                 centerpix_w = int(w_start_px + self.offset)
                 im_centerpix_rgb = all_class_data_as_rgb[img_idx][centerpix_h, centerpix_w]
-                # region_half_width = 4
-                # center_region_rgb = all_class_data_as_rgb[img_idx][centerpix_h - region_half_width:centerpix_h + region_half_width][centerpix_w - region_half_width:centerpix_w + region_half_width]
-                # if np.any(np.logical_or((center_region_rgb[:, :, 1] == 255), 
-                        # (center_region_rgb[:, :, 2] == 255))):
-                    # y[idx_to_write] = 3
-                # else:
                 cla = self.colors_to_classes.get(tuple(im_centerpix_rgb), 3)
                 y[idx_to_write] = cla
             if centerpix_or_pixelwise == 'centerpix':
@@ -226,7 +220,7 @@ class keras_models(object):
                                           self.conv_size),
                             # LeakyReLU(alpha=0.01),
                             Activation('relu'),
-                            # MaxPooling2D(pool_size=(self.pool_size, self.pool_size)),
+                            MaxPooling2D(pool_size=(self.pool_size, self.pool_size)),
                             ZeroPadding2D((1, 1)),
                             Convolution2D(self.n_conv_nodes/2,
                                           self.conv_size,
@@ -239,7 +233,7 @@ class keras_models(object):
                                           self.conv_size),
                             # LeakyReLU(alpha=0.01),
                             Activation('relu'),
-                            # MaxPooling2D(pool_size=(self.pool_size, self.pool_size)),
+                            MaxPooling2D(pool_size=(self.pool_size, self.pool_size)),
                             # Dropout(self.primary_dropout),
                             Flatten(),
                             Dense(self.n_dense_nodes*2),
