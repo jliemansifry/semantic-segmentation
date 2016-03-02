@@ -16,29 +16,30 @@ import theano.tensor as T
 import pickle
 
 
-def load_data(lats, lngs, h=400, w=640, sub_im_width=64, sample_stride=4, equal_classes=False):
-    usable_height = 380
-    usable_width = 640
-    total_num_img = len(lats) * (len(lngs))
-    all_satellite_data = np.zeros((total_num_img, usable_height, usable_width, 3), dtype=np.uint8)
-    all_class_data = np.zeros((total_num_img, usable_height, usable_width, 3), dtype=np.uint8)
-    classes = {(0, 0, 0): 0, (0, 0, 255): 1, (0, 255, 0): 2}  # 0: background; 1: water; 2: road
+def load_data(data_dir, h=380, w=640, sub_im_width=64, sample_stride=16, equal_classes=False):
+    all_image_filenames = os.listdir(data_dir)
+    satellite_filenames = [f for f in all_image_filenames if 'satellite' in f]
+    segmented_filenames = [f for f in all_image_filenames if 'segmented' in f]
+    total_num_img = len(satellite_filenames)
+    all_satellite_data = np.zeros((total_num_img, h, w, 3), dtype=np.uint8)
+    all_class_data_as_RGB= np.zeros((total_num_img, h, w, 3), dtype=np.uint8)
+    # all_class_data_as_class = np.zeros((total_num_img, h, w, 3), dtype=np.uint8)
+    colors_to_classes = {(0, 0, 0): 0, (0, 0, 255): 1, (0, 255, 0): 2}  # 0: background; 1: water; 2: road
+    # classes_to_colors = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
     idx_to_write = 0
-    ### Load all image data ###
     print 'Loading image data...'
-    for lat in lats:
-        for lng in lngs:
-            base_filename = 'data/lat_{},long_{}'.format(str(lat)[:8], str(lng)[:8])
-            satellite_data = imread('{}_satellite.png'.format(base_filename))[:usable_height]
-            class_data = imread('{}_segmented.png'.format(base_filename))[:usable_height]
-            all_satellite_data[idx_to_write] = satellite_data
-            all_class_data[idx_to_write] = class_data
-            idx_to_write += 1
+    for idx, satellite_filename in enumerate(satellite_filenames):
+        satellite_img = imread('{}/{}'.format(data_dir, satellite_filename))[:h]
+        all_satellite_data[idx] = satellite_img
+    for idx, segmented_filename in enumerate(segmented_filenames):
+        segmented_img = imread('{}/{}'.format(data_dir, segmented_filename))[:h]
+        all_class_data_as_RGB[idx] = segmented_img
+ 
     print 'Done. \nSubsetting image data...'
     ### Subset image data ###
     offset = sub_im_width/2.  # Need to start where subset image frame will fill
-    h_start_pxs = np.arange(offset, usable_height-sub_im_width, sample_stride)
-    w_start_pxs = np.arange(offset, usable_width-sub_im_width, sample_stride)
+    h_start_pxs = np.arange(offset, h-sub_im_width+1, sample_stride)
+    w_start_pxs = np.arange(offset, w-sub_im_width+1, sample_stride)
     total_num_sampled_img = total_num_img * len(h_start_pxs) * len(w_start_pxs)
     X = np.zeros((total_num_sampled_img, sub_im_width, sub_im_width, 3), dtype=np.uint8)
     y = np.zeros(total_num_sampled_img)
@@ -49,17 +50,17 @@ def load_data(lats, lngs, h=400, w=640, sub_im_width=64, sample_stride=4, equal_
                 h_end_px = h_start_px + sub_im_width
                 w_end_px = w_start_px + sub_im_width
                 im_subset = all_satellite_data[img_idx][h_start_px:h_end_px, w_start_px:w_end_px]
-                im_subset_rgb = all_class_data[img_idx][h_start_px+offset, w_start_px+offset]
-                cla = classes.get(tuple(im_subset_rgb), 0)
+                im_subset_rgb = all_class_data_as_RGB[img_idx][h_start_px+offset, w_start_px+offset]
+                cla = colors_to_classes.get(tuple(im_subset_rgb), 0)
                 X[idx_to_write] = im_subset
                 y[idx_to_write] = cla
                 idx_to_write += 1
     print 'Done. \nReshaping image data...'
     if equal_classes:
-        len_smallest_class = np.min([np.sum(y==i) for i in range(len(classes))])
-        X_eq = np.zeros((len_smallest_class*len(classes), sub_im_width, sub_im_width, 3))
-        y_eq = np.zeros(len_smallest_class*len(classes),)
-        X_by_class = [np.where(y==i)[0][:len_smallest_class] for i in range(len(classes))]
+        len_smallest_class = np.min([np.sum(y==i) for i in range(3)])
+        X_eq = np.zeros((len_smallest_class*3, sub_im_width, sub_im_width, 3))
+        y_eq = np.zeros(len_smallest_class*3)
+        X_by_class = [np.where(y==i)[0][:len_smallest_class] for i in range(3)]
         X_eq[::3] = X[X_by_class[0]]
         X_eq[1::3] = X[X_by_class[1]]
         X_eq[2::3] = X[X_by_class[2]]
@@ -68,19 +69,13 @@ def load_data(lats, lngs, h=400, w=640, sub_im_width=64, sample_stride=4, equal_
         y_eq[2::3] = y[X_by_class[2]]
         X = X_eq
         y = y_eq
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
-    num_train_img = X_train.shape[0]
-    num_test_img = X_test.shape[0]
-    X_train = X_train.reshape(num_train_img, 3, sub_im_width, sub_im_width)
-    X_test = X_test.reshape(num_test_img, 3, sub_im_width, sub_im_width)
-    X_train = X_train.astype('float32')
-    X_test = X_test.astype('float32')
-    X_train /= 255.
-    X_test /= 255.
-    y_train = np_utils.to_categorical(y_train, len(classes))
-    y_test = np_utils.to_categorical(y_test, len(classes))
+    X = X.astype('float32')
+    X /= 255.
+    num_all_img = X.shape[0]
+    X = X.reshape(num_all_img, 3, sub_im_width, sub_im_width)
+    y = np_utils.to_categorical(y, 3)
     print 'Done.'
-    return X_train, y_train, X_test, y_test
+    return X, y
 
 
 def set_basic_model_param():
@@ -175,7 +170,7 @@ def compile_model(model_param, segmentation=False):
         #model_param_to_add += [Convolution2D(128, 1, 1)]#, init='uniform')]
         model_param_to_add += [Convolution2D(3, 1, 1)]#, init='uniform')]
 
-        #model_param_to_add += [Activation('softmax')]
+        model_param_to_add += [Activation('softmax')]
         
         #model_param_to_add += [Activation('softmax')]
     for process in model_param_to_add:
@@ -185,35 +180,28 @@ def compile_model(model_param, segmentation=False):
     return model
 
 
-def fit_and_save_model(model, model_param, X_train, y_train, X_test, y_test):
+def fit_and_save_model(model, model_param, X, y):
     ''' 
     INPUT:  (1) Compiled (but untrained) Keras model
             (2) Dictionary of model parameters
-            (3) 4D numpy array: the X training data, of shape (#train_images,
-                #chan, #rows, #columns); for MNIST this is (60000, 1, 28, 28)
-            (4) 1D numpy array: the training labels, y, of shape (60000,)
-            (5) 4D numpy array: the X test data, of shape (#test_images, 
-                #chan, #rows, #columns); for MNIST this is (10000, 1, 28, 28)
-            (6) 1D numpy array: the test labels, of shape (10000,)
+            (3) 4D numpy array: the X data,
+            (4) 1D numpy labels
     OUTPUT: None, but the model will be saved to /models
     '''
     print 'Fitting model...\n'
     start = time.clock()
     early_stopping_monitor = EarlyStopping(monitor='val_loss', 
-                                                           patience=0,
+                                                           patience=3,
                                                            verbose=1)
-    hist = model.fit(X_train, y_train, batch_size=model_param['batch_size'], 
+    hist = model.fit(X, y, batch_size=model_param['batch_size'], 
                     nb_epoch=model_param['n_epoch'], 
                     callbacks=[early_stopping_monitor],
                     show_accuracy=True, verbose=1,
-                    validation_data=(X_test, y_test))
+                    validation_split=0.1)
     print hist.history
     stop = time.clock()
     print 'Done.'
     total_run_time = (stop - start) / 60.
-    score = model.evaluate(X_test, y_test, show_accuracy=True, verbose=0)
-    print 'Test score: {}'.format(score[0])
-    print 'Test accuracy: {}'.format(score[1])
     print 'Total run time: {}'.format(total_run_time)
 
     model_name = 'KerasBaseModel_{}'.format(model_param['model_build'])
@@ -232,11 +220,10 @@ def fit_and_save_model(model, model_param, X_train, y_train, X_test, y_test):
 
 
 if __name__ == '__main__':
-    lats = np.linspace(28.35, 28.45, 6)
-    lngs = np.linspace(-81.35, -81.45, 6)
-    # sd, cd = load_data(lats, lngs)
-    X_train, y_train, X_test, y_test = load_data(lats, lngs, equal_classes=True)
-    # sd, cd, X, y = load_data(lats, lngs)
+    # lats = np.linspace(28.35, 28.45, 6)
+    # lngs = np.linspace(-81.35, -81.45, 6)
+    data_dir = 'data400x640'
+    X, y = load_data(data_dir, equal_classes=True)
     model_param = set_basic_model_param()
     model = compile_model(model_param)
-    fit_and_save_model(model, model_param, X_train, y_train, X_test, y_test)
+    fit_and_save_model(model, model_param, X, y)

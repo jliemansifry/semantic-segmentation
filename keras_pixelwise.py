@@ -8,6 +8,7 @@ from keras.models import Sequential
 from keras.layers.core import Dense, Dropout, Activation, Flatten, Reshape
 from keras.layers.convolutional import Convolution2D, MaxPooling2D, ZeroPadding2D
 from keras.utils import np_utils
+from keras.optimizers import SGD
 import matplotlib.pyplot as plt
 from keras.callbacks import EarlyStopping
 #import cv2
@@ -16,7 +17,7 @@ import theano.tensor as T
 import pickle
 
 
-def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=8, equal_classes=True):
+def load_data(data_dir, h=640, w=640, sub_im_width=128, sample_stride=48, equal_classes=True):
     ''' 
     INPUT:  (1) string of the directory where satellite and segmented images
                 are located
@@ -35,7 +36,7 @@ def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=8, equal_cl
     all_class_data_as_RGB= np.zeros((total_num_img, h, w, 3), dtype=np.uint8)
     all_class_data_as_class = np.zeros((total_num_img, h, w, 3), dtype=np.uint8)
     colors_to_classes = {(0, 0, 0): 0, (0, 0, 255): 1, (0, 255, 0): 2}  # 0: background; 1: water; 2: road
-    classes_to_colors = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
+    # classes_to_colors = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
     idx_to_write = 0
     print 'Loading image data...'
     for idx, satellite_filename in enumerate(satellite_filenames):
@@ -93,16 +94,18 @@ def load_data(data_dir, h=640, w=640, sub_im_width=64, sample_stride=8, equal_cl
     if equal_classes:
         classwise_pixcount_per_img = [np.sum(y[:, :, :, i]==1, axis=2).sum(1)
                                       for i in range(3)]
-        road_img_locs = classwise_pixcount_per_img[2] > 100  # pick some threshold
-        water_img_locs = classwise_pixcount_per_img[1] > 500
+        road_img_locs = classwise_pixcount_per_img[1] > 5  # pick some threshold
+        water_img_locs = classwise_pixcount_per_img[2] > 10
         road_and_water_locs = np.logical_and(road_img_locs,
                                              water_img_locs)
         X = X[road_and_water_locs]
         y = y[road_and_water_locs]
+        del road_and_water_locs
+        del water_img_locs
+        del road_img_locs
     print 'Done. \nReshaping image data...'
     X = X.astype('float32')
     X /= 255.
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
     num_all_img = X.shape[0]
     X = X.reshape(num_all_img, 3, sub_im_width, sub_im_width)
     y = y.reshape(num_all_img, sub_im_width**2, 3)
@@ -119,19 +122,19 @@ def set_basic_model_param():
     For lightweight tuning of the model (ie. no change in overall structure) 
     it's easiest to keep all model parameters in one place.
     '''
-    model_param = {'n_rows': 64, 
-                   'n_cols': 64,
+    model_param = {'n_rows': 16,
+                   'n_cols': 16,
                    'n_chan': 3,
                    'n_classes': 3,
                    'n_epoch': 10,
-                   'batch_size': 16,
+                   'batch_size': 1,
                    'pool_size': 2,
                    'conv_size': 3,
-                   'n_conv_nodes': 128,
+                   'n_conv_nodes': 256,
                    'n_dense_nodes': 128,
                    'primary_dropout': 0.25,
                    'secondary_dropout': 0.5,
-                   'model_build': 'v.0.1_nopool_pixelwise_zoom14_superselected'} #_{}'.format(model_info)}
+                   'model_build': 'v.0.1_128x128_nopool_256nodes_4deep_nodrop_pixelwise_zoom18_no12811conv_16x16img_equalclass_1batch'} #_{}'.format(model_info)}
     return model_param
 
 
@@ -148,19 +151,19 @@ def compile_model(model_param):
                                         input_shape=(model_param['n_chan'],
                                                     model_param['n_rows'],
                                                     model_param['n_cols'])),
-                          Convolution2D(model_param['n_conv_nodes']/8,
+                          Convolution2D(model_param['n_conv_nodes'],
                                         model_param['conv_size'],
                                         model_param['conv_size']),
                           Activation('relu'),
                           ZeroPadding2D((1, 1)),
-                          Convolution2D(model_param['n_conv_nodes']/4,
+                          Convolution2D(model_param['n_conv_nodes'],
                                         model_param['conv_size'],
                                         model_param['conv_size']),
                           Activation('relu'),
                           ZeroPadding2D((1, 1)),
-                          # MaxPooling2D(pool_size=(model_param['pool_size'],
-                                                  # model_param['pool_size'])),
-                          Convolution2D(model_param['n_conv_nodes']/2, 
+                          # # MaxPooling2D(pool_size=(model_param['pool_size'],
+                                                  # # model_param['pool_size'])),
+                          Convolution2D(model_param['n_conv_nodes'],
                                         model_param['conv_size'],
                                         model_param['conv_size']),
                           Activation('relu'),
@@ -169,14 +172,32 @@ def compile_model(model_param):
                                         model_param['conv_size'],
                                         model_param['conv_size']),
                           Activation('relu'),
+                          # ZeroPadding2D((1, 1)),
+                          # Convolution2D(model_param['n_conv_nodes'], 
+                                        # model_param['conv_size'],
+                                        # model_param['conv_size']),
+                          # Activation('relu'),
+                          # ZeroPadding2D((1, 1)),
+                          # Convolution2D(model_param['n_conv_nodes'], 
+                                        # model_param['conv_size'],
+                                        # model_param['conv_size']),
+                          # Activation('relu'),
+                          # ZeroPadding2D((1, 1)),
+                          # Convolution2D(model_param['n_conv_nodes'], 
+                                        # model_param['conv_size'],
+                                        # model_param['conv_size']),
+                          # Activation('relu'),
                           # MaxPooling2D(pool_size=(model_param['pool_size'],
                                                   # model_param['pool_size'])),
-                          Dropout(model_param['primary_dropout']),#,
-                          Convolution2D(128, 1, 1),
-                          Activation('relu'),
+                          # Dropout(model_param['primary_dropout']),#,
+                          # Convolution2D(128, 1, 1),
+                          # Activation('relu'),
+                          # Dropout(model_param['secondary_dropout']),#,
                           Convolution2D(3, 1, 1),
-                          Reshape((64**2, 3)),
+                          Reshape((model_param['n_rows']*model_param['n_cols'],
+                                   3)),
                           Activation('softmax')]
+    # sgd = SGD(lr=1e-3, decay=5e-4, momentum=0.9, nesterov=True)
     for process in model_param_to_add:
         model.add(process)
     model.compile(loss='categorical_crossentropy', optimizer='adadelta')
@@ -193,7 +214,7 @@ def fit_and_save_model(model, model_param, X, y):
     print 'Fitting model...\n'
     start = time.clock()
     early_stopping_monitor = EarlyStopping(monitor='val_loss', 
-                                           patience=0,
+                                           patience=2,
                                            verbose=1)
     hist = model.fit(X, y, batch_size=model_param['batch_size'], 
                     nb_epoch=model_param['n_epoch'], 
@@ -221,7 +242,7 @@ def fit_and_save_model(model, model_param, X, y):
 
 
 if __name__ == '__main__':
-    X, y = load_data('data640x640zoom15', equal_classes=True)
+    X, y = load_data('data640x640zoom18', sub_im_width=16, sample_stride=8, equal_classes=False)
     model_param = set_basic_model_param()
     model = compile_model(model_param)
     fit_and_save_model(model, model_param, X, y)
