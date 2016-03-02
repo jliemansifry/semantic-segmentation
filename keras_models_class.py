@@ -85,23 +85,24 @@ class keras_models(object):
             y = np.zeros(total_num_sampled_img)
         elif centerpix_or_pixelwise == 'pixelwise':
             ''' More complicated. Need one-hot mapping from pixel colors. 
-            all_class_data_as_class will be used later in this namespace.'''
+            all_class_data_pixelwise_as_onehot will be used later in this namespace.'''
             y = np.zeros((total_num_sampled_img, 
                         self.sub_im_width, 
                         self.sub_im_width, 
-                        self.n_chan), dtype=np.uint8)
+                        self.n_classes), dtype=np.uint8)
             print 'Done. \nCreating one-hot mapping from pixel colors...'
-            all_class_data_as_class = np.zeros((total_num_img, 
-                                                self.h, 
-                                                self.w, 
-                                                self.n_chan), dtype=np.uint8)
+            all_class_data_pixelwise_as_onehot = np.zeros((total_num_img, 
+                                                           self.h, 
+                                                           self.w, 
+                                                           self.n_classes),
+                                                          dtype=np.float32)
             for rgb_color in self.colors_to_classes.keys():
                 color_true = np.logical_and(
                             (all_class_data_as_rgb[:, :, :, 0] == rgb_color[0]),
                             (all_class_data_as_rgb[:, :, :, 1] == rgb_color[1]),
                             (all_class_data_as_rgb[:, :, :, 2] == rgb_color[2]))
                 locs = np.where(color_true)
-                all_class_data_as_class[locs[0], 
+                all_class_data_pixelwise_as_onehot[locs[0], 
                                         locs[1], 
                                         locs[2],
                                         self.colors_to_classes[rgb_color]] = 1
@@ -113,16 +114,20 @@ class keras_models(object):
                     building_true = color_true
                 elif rgb_color == (233, 229, 220):
                     background_true = color_true
-            other_locs = np.where((np.logical_or(water_true, road_true,
-                                                 building_true, background_true)==False))
-            all_class_data_as_class[other_locs[0],
+            water_or_road = np.logical_or(water_true, road_true)
+            labeled_background_or_building = np.logical_or(background_true, 
+                                                               building_true)
+            other_locs = np.where(np.logical_or(water_or_road, 
+                                       labeled_background_or_building)==False)
+            background_idx = self.n_classes - 1
+            all_class_data_pixelwise_as_onehot[other_locs[0],
                                     other_locs[1],
                                     other_locs[2],
-                                    0] = 3  # set as background
+                                    background_idx] = 1  # set as background
         ### LOAD Xy ###
         def load_Xy(centerpix_or_pixelwise):
             def pixelwise_y_loader():
-                im_subset_as_class = all_class_data_as_class[img_idx][h_start_px:h_end_px, w_start_px:w_end_px]
+                im_subset_as_class = all_class_data_pixelwise_as_onehot[img_idx][h_start_px:h_end_px, w_start_px:w_end_px]
                 y[idx_to_write] = im_subset_as_class
             def centerpix_y_loader():
                 centerpix_h = int(h_start_px + self.offset)
@@ -327,20 +332,29 @@ class keras_models(object):
         return model, path_to_save_model
 
 
-if __name__ == '__main__':
+def run_centerpix_defined_model(data_folder):
     km = keras_models(n_epoch=10, sub_im_width=64, batch_size=64, n_classes=4,
                       sample_stride=24, n_conv_nodes=128, n_dense_nodes=128)
-    data_folder = 'data640x640newColzoom18'
     X, y = km.load_data(data_folder, equal_classes=True,
                         centerpix_or_pixelwise='centerpix')
     model = km.compile_model(segmentation=False)
     model, path_to_centerpix_model = km.fit_and_save_model(model, 'centerpix', X, y)
-    # X_segmented, y_segmented = km.load_data(data_folder, equal_classes=False,
-                                            # centerpix_or_pixelwise='pixelwise')
+    return model
+
+def run_pixelwise_defined_model(data_folder):
+    km = keras_models(n_epoch=10, sub_im_width=64, batch_size=64, n_classes=4,
+                      sample_stride=64, n_conv_nodes=128, n_dense_nodes=128)
+    X_segmented, y_segmented = km.load_data(data_folder, equal_classes=False,
+                                            centerpix_or_pixelwise='pixelwise')
+    segmented_model = km.compile_model(segmentation=True)
     # segmented_model = km.load_model_weights(path_to_centerpix_model, 
                                             # centerpix_or_pixelwise='pixelwise')
-    # segmented_model, path_to_pixelwise_model = km.fit_and_save_model(segmented_model, 
-                                                                     # 'pixelwise',
-                                                                      # X_segmented, 
-                                                                      # y_segmented) 
+    segmented_model, path_to_pixelwise_model = km.fit_and_save_model(segmented_model, 
+                                                                     'pixelwise',
+                                                                      X_segmented, 
+                                                                      y_segmented) 
     # pixelwise_prediction(segmented_model, 'data640x640zoom18/lat_28.48830,long_-81.5087_satellite.png', 'data640x640zoom18/lat_28.48830,long_-81.5087_segmented.png')
+
+if __name__ == '__main__':
+    data_folder = 'data640x640newColzoom18'
+    run_pixelwise_defined_model(data_folder)
