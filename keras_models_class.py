@@ -283,7 +283,7 @@ class KerasModels(object):
                                           self.conv_size,
                                           self.conv_size),
                             LeakyReLU(alpha=0.01),
-                            BatchNormalization(),
+                            # BatchNormalization(),
                             # Activation('relu'),
                             # MaxPooling2D(pool_size=(self.pool_size, self.pool_size)),
                             ZeroPadding2D((1, 1)),
@@ -298,11 +298,11 @@ class KerasModels(object):
                                           self.conv_size,
                                           self.conv_size),
                             LeakyReLU(alpha=0.01),
-                            BatchNormalization(),
+                            # BatchNormalization(),
                             # Activation('relu'),
                             # MaxPooling2D(pool_size=(self.pool_size, self.pool_size)),
-                            Dropout(self.primary_dropout),
                             Flatten(),
+                            Dropout(self.primary_dropout),
                             Dense(self.n_dense_nodes),
                             LeakyReLU(alpha=0.01),
                             # Activation('relu'),
@@ -321,12 +321,13 @@ class KerasModels(object):
     
 
     def behead_model(self, model, num_layers_to_chop=5):
-        print 'Beheading {} layers from model...'.format(num_layers_to_chop)
+        print 'Beheading model...'
         model_layers = model.layers
-        for layer in range(num_layers_to_chop):
-            model_layers.pop(-1)
+        flatten_idx = [idx for idx
+                       in range(len(model_layers))
+                       if model_layers[idx].get_config()['name'] == 'Flatten'][0]
         print 'Done.'
-        return model_layers
+        return model_layers[:flatten_idx]
 
 
     def add_pixelwise_head(self, model_layers):
@@ -439,8 +440,8 @@ def run_pixelwise_defined_model(data_folder, path_to_centerpix_model, name_appen
 
 if __name__ == '__main__':
     data_folder = 'data640x640newColzoom18'
-    name_append = '2xoversampled_nobatchnorm_32batch_c163264128d128_withdropout'#_zeroinit'
+    name_append = '2xoversampled_nobatchnorm_32batch_c163264128d128'#_zeroinit'
     # name_append = 'oversampled_no12811_equalerclasses'
-    # path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_oversampled'
-    X, y, model, path_to_centerpix_model = run_centerpix_defined_model(data_folder, name_append)
-    # X_seg, y_seg, seg_model = run_pixelwise_defined_model(data_folder, path_to_centerpix_model, name_append)
+    path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_{}'.format(name_append)
+    # X, y, model, path_to_centerpix_model = run_centerpix_defined_model(data_folder, name_append)
+    X_seg, y_seg, seg_model = run_pixelwise_defined_model(data_folder, path_to_centerpix_model, name_append)
