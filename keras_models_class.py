@@ -1,26 +1,20 @@
 import numpy as np
 np.random.seed(1234)  # for reproducibility
-from sklearn.cross_validation import train_test_split
-from scipy.misc import imread
+from scipy.misc import imread, imsave
 import time
 import os
 from keras.models import Sequential, model_from_json
 from keras.layers.core import Dense, Dropout, Activation, Flatten, Reshape
 from keras.layers.convolutional import Convolution2D, MaxPooling2D, ZeroPadding2D
 from keras.layers.advanced_activations import LeakyReLU
-from keras.layers.normalization import BatchNormalization
 from keras.utils import np_utils
 from keras.optimizers import SGD
 import h5py
 import matplotlib # necessary to save plots remotely; comment out if local
 matplotlib.use('Agg') # comment out if local
-import matplotlib.pyplot as plt
 from keras.callbacks import EarlyStopping
-#import cv2
-#from keras import backend as K
-import theano.tensor as T
+import theano
 import pickle
-from additional_functions import pixelwise_prediction, probas_tensor_to_pixelwise_prediction
 
 
 class KerasModels(object):
@@ -29,8 +23,8 @@ class KerasModels(object):
     or classwise (ie. the img is defined by center pixel) fashion and 
     keeping track of hyperparameters. 
     '''
-    def __init__(self, h=640, w=640, sub_im_width=64, sample_stride=32, 
-                 n_chan=3, n_classes=4, n_epoch=10,
+    def __init__(self, h=640, w=640, true_imwidth=640, sub_im_width=64, 
+                 sample_stride=32, n_chan=3, n_classes=4, n_epoch=10, 
                  batch_size=16, pool_size=2, conv_size=3, n_conv_nodes=128,
                  n_dense_nodes=128, primary_dropout=0.25, secondary_dropout=0.5,
                  model_build='v.0.2'):
@@ -39,29 +33,33 @@ class KerasModels(object):
                     set at 20 pixels less than image height for a standard google 
                     maps image to cut off the google watermark
                 (2) integer 'w': the width (in pixels) to read input images up to
-                (3) integer 'sub_im_width': the width (in pixels) to 
+                (3) integer 'true_imwidth': the true width (in pixels) of the image;
+                    necessary in case training only on a subset of images but
+                    predicting on entirety of image
+                (4) integer 'sub_im_width': the width (in pixels) to 
                     make subsampled images
-                (4) integer 'sample_stride': how frequently (in pixels) 
+                (5) integer 'sample_stride': how frequently (in pixels) 
                     to sample the parent image for the subsampled images
-                (5) integer 'n_chan': number of channels in the image
-                (6) integer 'n_classes': number of classes (including background)
-                (7) integer 'n_epoch': number of classes to train for
-                (8) integer 'batch_size': the training batch size
-                (9) integer 'pool_size': the edge length (in pixels) for pooling
-                (10) integer 'conv_size': the edge length (in pixels) 
+                (6) integer 'n_chan': number of channels in the image
+                (7) integer 'n_classes': number of classes (including background)
+                (8) integer 'n_epoch': number of classes to train for
+                (9) integer 'batch_size': the training batch size
+                (10) integer 'pool_size': the edge length (in pixels) for pooling
+                (11) integer 'conv_size': the edge length (in pixels) 
                     for convolution kernel 
-                (11) integer 'n_conv_nodes': the parent number of convolutional nodes
+                (12) integer 'n_conv_nodes': the parent number of convolutional nodes
                     (see compile_model for details)
-                (12) integer 'n_dense_nodes': the parent number of dense nodes
+                (13) integer 'n_dense_nodes': the parent number of dense nodes
                     (see compile_model for details)
-                (13) float 'primary_dropout': the dropout after all conv layers
-                (14) float 'secondary_dropout': the dropout after dense layers
-                (15) string 'model_build': the version of the model
+                (14) float 'primary_dropout': the dropout after all conv layers
+                (15) float 'secondary_dropout': the dropout after dense layers
+                (16) string 'model_build': the version of the model
 
         Initialize all hyperparameters. 
         '''
         self.h = h
         self.w = w
+        self.true_imwidth = true_imwidth
         self.sub_im_width = sub_im_width
         self.sample_stride = sample_stride
         self.n_chan = n_chan
@@ -141,8 +139,10 @@ class KerasModels(object):
         if centerpix_or_pixelwise == 'centerpix':
             y = np.zeros(total_num_sampled_img)
         elif centerpix_or_pixelwise == 'pixelwise':
-            ''' More complicated. Need one-hot mapping from pixel colors. 
-            all_class_data_pixelwise_as_onehot will be used later in this namespace.'''
+            ''' For pixelwise class labels, we need a one hot mapping from the 
+            colors in the segmented image. all_class_data_pixelwise_as_onehot 
+            contains this information and will be subset simultaneously with X
+            later in this namespace. '''
             y = np.zeros((total_num_sampled_img, 
                         self.sub_im_width, 
                         self.sub_im_width, 
@@ -183,13 +183,29 @@ class KerasModels(object):
                                     background_idx] = 1  # set as background
         ### LOAD Xy ###
         def load_Xy(centerpix_or_pixelwise):
+            ''' 
+            INPUT:  (1) string: 'centerpix' if classes are to be defined by the 
+                        class of the center pixel; 'pixelwise' if pixelwise 
+                        class data is desired
+            OUTPUT: (1) 4D numpy array: subset training data of shape
+                        (total_num_sampled_img, sub_im_width, sub_im_width, n_chan)
+                    (2a) 1D numpy array: centerpix defined class labels of shape
+                        (total_num_sampled_img)
+                    (2b) 4D numpy array: subset pixelwise one-hot class labels of shape
+                        (total_num_sampled_img, sub_im_width, sub_im_width, n_classes)
+            '''
             def pixelwise_y_loader():
-                im_subset_as_class = all_class_data_pixelwise_as_onehot[img_idx][h_start_px:h_end_px, w_start_px:w_end_px]
+                ''' Helper function if 'pixelwise' classes.'''
+                im_subset_as_class = (
+                    all_class_data_pixelwise_as_onehot[img_idx][h_start_px:h_end_px, 
+                                                                w_start_px:w_end_px])
                 y[idx_to_write] = im_subset_as_class
             def centerpix_y_loader():
+                ''' Helper function if 'centerpix' classes.'''
                 centerpix_h = int(h_start_px + self.offset)
                 centerpix_w = int(w_start_px + self.offset)
-                im_centerpix_rgb = all_class_data_as_rgb[img_idx][centerpix_h, centerpix_w]
+                im_centerpix_rgb = all_class_data_as_rgb[img_idx][centerpix_h, 
+                                                                  centerpix_w]
                 cla = self.colors_to_classes.get(tuple(im_centerpix_rgb), 3)
                 y[idx_to_write] = cla
             if centerpix_or_pixelwise == 'centerpix':
@@ -232,8 +248,9 @@ class KerasModels(object):
             if equal_classes:
                 y_without_background = y[y != 3]
                 X_without_background = X[y != 3]
-                len_smallest_class = np.min([np.sum(y_without_background==i) 
-                    for i in range(self.n_classes_no_background)])
+                len_smallest_class = np.min(
+                                     [np.sum(y_without_background==i) 
+                                      for i in range(self.n_classes_no_background)])
                 X_eq = np.zeros((len_smallest_class*self.n_classes_no_background,
                                  self.sub_im_width, 
                                  self.sub_im_width, 
@@ -242,8 +259,10 @@ class KerasModels(object):
                 X_by_class = [np.where(y_without_background==i)[0][:len_smallest_class]
                               for i in range(self.n_classes_no_background)]
                 for i in range(self.n_classes_no_background):
-                    X_eq[i::self.n_classes_no_background] = X_without_background[X_by_class[i]]
-                    y_eq[i::self.n_classes_no_background] = y_without_background[X_by_class[i]]
+                    X_eq[i::self.n_classes_no_background] = (
+                            X_without_background[X_by_class[i]])
+                    y_eq[i::self.n_classes_no_background] = (
+                            y_without_background[X_by_class[i]])
                 X = X_eq
                 y = y_eq
         X = X.astype('float32')
@@ -260,10 +279,8 @@ class KerasModels(object):
 
     def compile_model(self):
         ''' 
-        INPUT:  (1) Dictionary of model parameters
+        INPUT:  None
         OUTPUT: (1) Compiled (but untrained) Keras model
-        Any large scale model architecture changes would happen here in 
-        conjunction with adjustments to set_basic_model_param.
         '''
         print 'Compiling model...'
         model = Sequential()
@@ -299,10 +316,10 @@ class KerasModels(object):
                                           self.conv_size),
                             LeakyReLU(alpha=0.01),
                             # BatchNormalization(),
-                            # Activation('relu'),
                             # MaxPooling2D(pool_size=(self.pool_size, self.pool_size)),
-                            Flatten(),
                             Dropout(self.primary_dropout),
+                            Flatten(),
+                            # Dropout(self.primary_dropout),
                             Dense(self.n_dense_nodes),
                             LeakyReLU(alpha=0.01),
                             # Activation('relu'),
@@ -320,17 +337,34 @@ class KerasModels(object):
         return model
     
 
-    def behead_model(self, model, num_layers_to_chop=5):
+    def behead_model(self, model):
+        ''' 
+        INPUT:  (1) Trained model
+        OUTPUT: (1) list: all convolutional layers and activations
+        '''
         print 'Beheading model...'
         model_layers = model.layers
-        flatten_idx = [idx for idx
-                       in range(len(model_layers))
-                       if model_layers[idx].get_config()['name'] == 'Flatten'][0]
+        behead_idx = 0
+        layer_names = [model_layers[idx].get_config()['name']
+                       for idx in range(len(model_layers))]
+        for idx, layer_name in enumerate(layer_names):
+            if idx > 0:
+                if layer_name == 'Flatten' and layer_names[idx-1] != 'Dropout':
+                    behead_idx = idx
+                elif layer_name == 'Flatten' and layer_names[idx-1] == 'Dropout':
+                    behead_idx = idx - 1
         print 'Done.'
-        return model_layers[:flatten_idx]
+        return model_layers[:behead_idx]
 
 
     def add_pixelwise_head(self, model_layers):
+        ''' 
+        INPUT:  (1) list of layers to add the convolutional layers to
+        OUTPUT: (1) Keras model
+
+        Add fully convolutional layers in place of the dense layers 
+        at the end of the model.
+        '''
         print 'Adding convolutional layers to model...'
         model = Sequential()
         # model_layers += [Convolution2D(self.n_dense_nodes, 1, 1)]
@@ -345,19 +379,22 @@ class KerasModels(object):
         return model
         
    
-    def load_model_weights(self, path_to_model, centerpix_or_pixelwise):
+    def load_model_weights(self, path_to_model, untilflatten_or_all):
         ''' 
         INPUT:  (1) String: The path to the saved model architecture and weights, 
                     not including .json or .h5 at the end
+                (2) string: if 'untilflatten' the model weights will only be
+                    loaded for convolutional layers; if 'all' then all model
+                    weights will be loaded
         OUTPUT: (1) Trained and compiled Keras model
         '''
         print 'Loading model weights...'
         json_file_name = '{}.json'.format(path_to_model)
         weights_file_name = '{}.h5'.format(path_to_model)
-        if centerpix_or_pixelwise == 'pixelwise':
+        if untilflatten_or_all == 'untilflatten':
             weights_file = h5py.File(weights_file_name)
             model_structure = model_from_json(open(json_file_name).read())
-            model_layers = self.behead_model(model_structure, num_layers_to_chop=5)
+            model_layers = self.behead_model(model_structure)
             model = self.add_pixelwise_head(model_layers)
             for layer_num in range(weights_file.attrs['nb_layers']):
                 print 'Loading weights for layer {}'.format(layer_num)
@@ -368,10 +405,11 @@ class KerasModels(object):
                            for p in range(weights_obj.attrs['nb_params'])]
                 model.layers[layer_num].set_weights(weights)
             weights_file.close()
-        elif centerpix_or_pixelwise == 'centerpix':
+        elif untilflatten_or_all == 'all':
             model = model_from_json(open(json_file_name).read())
             model.load_weights(weights_file_name)
-        model.compile(loss='categorical_crossentropy', optimizer='adadelta')
+        sgd = SGD(lr=0.1, decay=2e-4, momentum=0.9, nesterov=True)
+        model.compile(loss='categorical_crossentropy', optimizer=sgd)
         print 'Done loading model weights.'
         return model
 
@@ -412,6 +450,82 @@ class KerasModels(object):
         return model, path_to_save_model
 
 
+    def probas_tensor_to_pixelwise_prediction(self, model, X_sub):
+        y_pred = model.predict(X_sub.reshape(1, 3, self.sub_im_width, 
+                                                       self.sub_im_width)/255.)
+        y_pred = y_pred.reshape(self.sub_im_width, self.sub_im_width, self.n_classes)
+        pixelwise_prediction = np.argmax(y_pred[:, :, :], axis=2)
+        pixelwise_color = np.zeros((self.sub_im_width, self.sub_im_width, 3))
+        for class_num in range(self.n_classes):
+            class_color = self.classes_to_colors[class_num]
+            class_locs = np.where(pixelwise_prediction == class_num)
+            class_locs_Xdim = class_locs[0]
+            class_locs_Ydim = class_locs[1]
+            for RGB_idx in range(self.n_chan):
+                pixelwise_color[class_locs_Xdim, 
+                                class_locs_Ydim,
+                                RGB_idx] = class_color[RGB_idx]/255.
+        return pixelwise_prediction, pixelwise_color
+
+
+    def pixelwise_prediction(self, model, X_test_img_filename, y_test_img_filename):
+        # offset = int(sub_im_width/2.)
+        X_test_img = imread(X_test_img_filename)
+        y_test_img = imread(y_test_img_filename)
+        y_pred_img = np.zeros((self.true_imwidth, self.true_imwidth, 3))
+        h_start_pxs = np.arange(0, self.true_imwidth, self.sub_im_width)
+        w_start_pxs = np.arange(0, self.true_imwidth, self.sub_im_width)
+        total_preds = len(h_start_pxs) * len(w_start_pxs)
+        idx_to_write = 0
+        # classwise_correct = {i: 0 for i in range(len(color_to_class))}
+        for h_start_px in h_start_pxs:
+            for w_start_px in w_start_pxs:
+                print 'Calculating probas for part {} of {}'.format(idx_to_write,
+                                                                    total_preds)
+                h_end_px = h_start_px + self.sub_im_width
+                w_end_px = w_start_px + self.sub_im_width
+                im_subset = X_test_img[h_start_px:h_end_px, w_start_px:w_end_px]
+                #im_subset_rgb = y_with_border[h_start_px+offset, w_start_px+offset]
+                #im_subset_rgb = y_test_img[h_start_px+offset, w_start_px+offset]
+                #y_true_temp = color_to_class.get(tuple(im_subset_rgb))
+                #y_pred = model.predict_classes(im_subset, verbose=0)
+                pixelwise_prediction, pixelwise_color = self.probas_tensor_to_pixelwise_prediction(model, im_subset)
+                y_pred_img[h_start_px:h_end_px, w_start_px:w_end_px] = pixelwise_color
+                # if y_true_temp == y_pred:
+                    # classwise_correct[y_true_temp] += 1
+                # y_true[idx_to_write] = y_true_temp
+                #color_to_write = class_to_color[y_pred[0]]
+                #y_pred_img[h_start_px, w_start_px] = color_to_write
+                idx_to_write +=1
+        # plt.imshow(y_pred_img)
+        # plt.show()
+        y_split_filename = y_test_img_filename.split('/')
+        y_pred_filename = 'preds/{}_pred.png'.format(y_split_filename[1][:-4])
+        print 'saving at {}_pred.png'.format(y_pred_filename)
+        imsave(y_pred_filename, y_pred_img)
+        # classwise_accs = {i: (classwise_correct[i]/float(len(y_true==1)))
+                        # for i in range(len(class_to_color))}
+        #return y_pred_img#  X_with_border, y_with_border, y_pred_img, classwise_accs
+
+
+    def get_activations(model, layer, X_batch):
+        '''
+        INPUT:  (1) Keras Sequential model object
+                (2) integer: The layer to extract weights from
+                (3) 4D numpy array: All the X data you wish to extract
+                    activations for
+        OUTPUT: (1) numpy array: Activations for that layer
+        '''
+        input_layer = model.layers[0].input
+        specified_layer_output = model.layers[layer].get_output(train=False)
+        get_activations = theano.function([input_layer],
+                                        specified_layer_output,
+                                        allow_input_downcast=True)
+        activations = get_activations(X_batch)
+        return activations
+
+
+
 def run_centerpix_defined_model(data_folder, name_append):
     km = KerasModels(n_epoch=10, sub_im_width=64, batch_size=32, n_classes=4,
                       h=620, sample_stride=20, n_conv_nodes=128, n_dense_nodes=128)
@@ -429,19 +543,32 @@ def run_pixelwise_defined_model(data_folder, path_to_centerpix_model, name_appen
     X_segmented, y_segmented = km.load_data(data_folder, equal_classes=True,
                                             centerpix_or_pixelwise='pixelwise')
     segmented_model = km.load_model_weights(path_to_centerpix_model, 
-                                            centerpix_or_pixelwise='pixelwise')
+                                            untilflatten_or_all='untilflatten')
     name_to_append = 'pixelwise_{}'.format(name_append)
     segmented_model, path_to_pixelwise_model = km.fit_and_save_model(segmented_model, 
                                                                      name_to_append,
                                                                      X_segmented, 
                                                                      y_segmented) 
     return X_segmented, y_segmented, segmented_model
-    # pixelwise_prediction(segmented_model, 'data640x640zoom18/lat_28.48830,long_-81.5087_satellite.png', 'data640x640zoom18/lat_28.48830,long_-81.5087_segmented.png')
+    pixelwise_prediction(segmented_model, 'data640x640zoom18/lat_28.48830,long_-81.5087_satellite.png', 'data640x640zoom18/lat_28.48830,long_-81.5087_segmented.png')
+
+
+def load_model_and_make_pred():
+    ''' Lazy fn to run for prediction in an ipython session.'''
+    from keras_models_class import KerasModels
+    km  = KerasModels(n_epoch=10, sub_im_width=64, batch_size=64, n_classes=4,
+                    sample_stride=64, n_conv_nodes=128, n_dense_nodes=128)
+    fsat = 'data640x640new2Colzoom18/lat_26.03,long_-80.25_satellite.png'
+    fseg = 'data640x640new2Colzoom18/lat_26.03,long_-80.25_segmented.png'
+    model = km.load_model_weights('models/KerasBaseModel_v.0.2_pixelwise_oversampled_no12811_equalerclasses', untilflatten_or_all='all')
+    km.pixelwise_prediction(model, fsat, fseg)
+
 
 if __name__ == '__main__':
     data_folder = 'data640x640newColzoom18'
-    name_append = '2xoversampled_nobatchnorm_32batch_c163264128d128'#_zeroinit'
-    # name_append = 'oversampled_no12811_equalerclasses'
-    path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_{}'.format(name_append)
+    # name_append = '2xoversampled_nobatchnorm_32batch_c163264128128d128_pooling'#_zeroinit'
+    name_append = 'oversampled_no12811_equalerclasses_sgd'
+    # path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_{}'.format(name_append)
+    path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_2xoversampled_nobatchnorm_32batch_c163264128d128'
     # X, y, model, path_to_centerpix_model = run_centerpix_defined_model(data_folder, name_append)
     X_seg, y_seg, seg_model = run_pixelwise_defined_model(data_folder, path_to_centerpix_model, name_append)
