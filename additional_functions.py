@@ -1,4 +1,6 @@
 import numpy as np
+import matplotlib # necessary to save plots remotely; comment out if local
+matplotlib.use('Agg') # comment out if local
 import matplotlib.pyplot as plt
 from keras.models import model_from_json
 from PIL import Image, ImageOps
@@ -27,12 +29,17 @@ def load_model(path_to_model):
 
 
 def probas_tensor_to_pixelwise_prediction(model, X_sub, sub_im_width):
+    print sub_im_width
     y_pred = model.predict(X_sub/255.).reshape((1, sub_im_width, sub_im_width, 3))
     pixelwise_prediction = np.argmax(y_pred[0, :, :, :], axis=2)
-    class_to_color = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
+    # class_to_color = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
+    # colors_to_classes = {(233, 229, 220): 3, (0, 0, 255): 1,
+                                # (0, 255, 0): 2, (242, 240, 233): 0}
+    classes_to_colors = {3: (233, 229, 220), 1: (0, 0, 255), 
+                                2: (0, 255, 0), 0: (242, 240, 233)}
     pixelwise_color = np.zeros((sub_im_width, sub_im_width, 3))
     for class_num in range(3):
-        class_color = class_to_color[class_num]
+        class_color = classes_to_colors[class_num]
         class_locs = np.where(pixelwise_prediction == class_num)
         class_locs_Xdim = class_locs[0]
         class_locs_Ydim = class_locs[1]
@@ -43,7 +50,7 @@ def probas_tensor_to_pixelwise_prediction(model, X_sub, sub_im_width):
     return pixelwise_prediction, pixelwise_color
 
 
-def show_me_centerpix_img(X, y, class_idx):
+def show_me_centerpix_img(X, y, class_idx, show=False, save=False):
     ''' Assuming y is categorical'''
     fig = plt.figure(figsize=(10, 10))
     outer_grid = gridspec.GridSpec(10, 10, wspace=0.0, hspace=0.0)
@@ -61,7 +68,10 @@ def show_me_centerpix_img(X, y, class_idx):
         ax = plt.Subplot(fig, outer_grid[idx])
         plotcmd(ax, img)
         fig.add_subplot(ax)
-    plt.show()
+    if show:
+        plt.show()
+    if save:
+        plt.savefig('Class_{}_ex.png'.format(class_idx), dpi=150)
 
 
 def apply_filter(filename, typ='median'):
@@ -72,7 +82,7 @@ def apply_filter(filename, typ='median'):
         return maximum_filter(img, 2)
 
 
-def pixelwise_prediction(model, X_test_img_filename, y_test_img_filename, h=640, w=640, sub_im_width=128):
+def pixelwise_prediction(model, X_test_img_filename, y_test_img_filename, h=640, w=640, sub_im_width=64):
     imwidth = 640
     # offset = int(sub_im_width/2.)
     X_test_img = imread(X_test_img_filename)
@@ -80,17 +90,23 @@ def pixelwise_prediction(model, X_test_img_filename, y_test_img_filename, h=640,
     y_pred_img = np.zeros((imwidth, imwidth, 3))
     h_start_pxs = np.arange(0, imwidth, sub_im_width)
     w_start_pxs = np.arange(0, imwidth, sub_im_width)
-    color_to_class = {(0, 0, 0): 0, (0, 0, 255): 1, (0, 255, 0): 2}  # 0: background; 1: water; 2: road
+    colors_to_classes = {(233, 229, 220): 3, (0, 0, 255): 1,
+                        (0, 255, 0): 2, (242, 240, 233): 0}
+    classes_to_colors = {3: (233, 229, 220), 1: (0, 0, 255), 
+                        2: (0, 255, 0), 0: (242, 240, 233)}
+
+    # color_to_class = {(0, 0, 0): 0, (0, 0, 255): 1, (0, 255, 0): 2}  # 0: background; 1: water; 2: road
     # class_to_color = {0: (0, 0, 0), 1: (0, 0, 255), 2: (0, 255, 0)}
     idx_to_write = 0
     # classwise_correct = {i: 0 for i in range(len(color_to_class))}
     for h_start_px in h_start_pxs:
         for w_start_px in w_start_pxs:
-            print idx_to_write
+            # print idx_to_write
             h_end_px = h_start_px + sub_im_width
             w_end_px = w_start_px + sub_im_width
             im_subset = X_test_img[h_start_px:h_end_px, w_start_px:w_end_px]
-            im_subset = im_subset.reshape(1, 3, sub_im_width, sub_im_width)
+            print im_subset.shape
+            # im_subset = im_subset.reshape(1, 3, sub_im_width, sub_im_width)
             #im_subset_rgb = y_with_border[h_start_px+offset, w_start_px+offset]
             #im_subset_rgb = y_test_img[h_start_px+offset, w_start_px+offset]
             #y_true_temp = color_to_class.get(tuple(im_subset_rgb))
