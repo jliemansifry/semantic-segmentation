@@ -12,6 +12,9 @@ from keras.optimizers import SGD
 import h5py
 import matplotlib # necessary to save plots remotely; comment out if local
 matplotlib.use('Agg') # comment out if local
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import pylab
 from keras.callbacks import EarlyStopping
 import theano
 import pickle
@@ -54,7 +57,6 @@ class KerasModels(object):
                 (14) float 'primary_dropout': the dropout after all conv layers
                 (15) float 'secondary_dropout': the dropout after dense layers
                 (16) string 'model_build': the version of the model
-
         Initialize all hyperparameters. 
         '''
         self.h = h
@@ -153,6 +155,8 @@ class KerasModels(object):
                                                            self.w, 
                                                            self.n_classes),
                                                           dtype=np.float32)
+            # rgb_colors = [(233, 229, 220), (0, 0, 255), (0, 255, 0), (242, 240, 233)]
+            # for rgb_color in rgb_colors:
             for rgb_color in self.colors_to_classes.keys():
                 color_true = np.logical_and(
                             (all_class_data_as_rgb[:, :, :, 0] == rgb_color[0]),
@@ -319,12 +323,11 @@ class KerasModels(object):
                             # MaxPooling2D(pool_size=(self.pool_size, self.pool_size)),
                             Dropout(self.primary_dropout),
                             Flatten(),
-                            # Dropout(self.primary_dropout),
                             Dense(self.n_dense_nodes),
                             LeakyReLU(alpha=0.01),
                             # Activation('relu'),
-                            # Dense(self.n_dense_nodes*2),
-                            # LeakyReLU(alpha=0.01),
+                            Dense(self.n_dense_nodes),
+                            LeakyReLU(alpha=0.01),
                             # Activation('relu'),
                             Dropout(self.secondary_dropout),
                             Dense(self.n_classes_no_background),
@@ -337,24 +340,20 @@ class KerasModels(object):
         return model
     
 
-    def behead_model(self, model):
+    def behead_model(self, classwise_model_layer_names):
         ''' 
         INPUT:  (1) Trained model
         OUTPUT: (1) list: all convolutional layers and activations
         '''
         print 'Beheading model...'
-        model_layers = model.layers
-        behead_idx = 0
-        layer_names = [model_layers[idx].get_config()['name']
-                       for idx in range(len(model_layers))]
-        for idx, layer_name in enumerate(layer_names):
+        for idx, layer_name in enumerate(classwise_model_layer_names):
             if idx > 0:
-                if layer_name == 'Flatten' and layer_names[idx-1] != 'Dropout':
+                if layer_name == 'Flatten' and classwise_model_layer_names[idx-1] != 'Dropout':
                     behead_idx = idx
-                elif layer_name == 'Flatten' and layer_names[idx-1] == 'Dropout':
+                elif layer_name == 'Flatten' and classwise_model_layer_names[idx-1] == 'Dropout':
                     behead_idx = idx - 1
         print 'Done.'
-        return model_layers[:behead_idx]
+        return behead_idx
 
 
     def add_pixelwise_head(self, model_layers):
@@ -367,8 +366,10 @@ class KerasModels(object):
         '''
         print 'Adding convolutional layers to model...'
         model = Sequential()
-        # model_layers += [Convolution2D(self.n_dense_nodes, 1, 1)]
-        # model_layers += [Activation('relu')]
+        model_layers += [Convolution2D(self.n_dense_nodes, 1, 1)]
+        model_layers += [Activation('relu')]
+        model_layers += [Convolution2D(self.n_dense_nodes, 1, 1)]
+        model_layers += [Activation('relu')]
         model_layers += [Convolution2D(self.n_classes, 1, 1)]
         model_layers += [Reshape((self.sub_im_width*self.sub_im_width, 
                                         self.n_classes))]
@@ -377,7 +378,7 @@ class KerasModels(object):
             model.add(process)
         print 'Done.'
         return model
-        
+
    
     def load_model_weights(self, path_to_model, untilflatten_or_all):
         ''' 
@@ -393,23 +394,66 @@ class KerasModels(object):
         weights_file_name = '{}.h5'.format(path_to_model)
         if untilflatten_or_all == 'untilflatten':
             weights_file = h5py.File(weights_file_name)
-            model_structure = model_from_json(open(json_file_name).read())
-            model_layers = self.behead_model(model_structure)
+            classwise_model_structure = model_from_json(open(json_file_name).read())
+            classwise_model_layer_names = (
+                    [classwise_model_structure.layers[idx].get_config()['name']
+                        for idx in range(len(classwise_model_structure.layers))])
+            behead_idx = (self.behead_model(classwise_model_layer_names))
+            print behead_idx
+            model_layers = classwise_model_structure.layers[:behead_idx]
             model = self.add_pixelwise_head(model_layers)
-            for layer_num in range(weights_file.attrs['nb_layers']):
-                print 'Loading weights for layer {}'.format(layer_num)
-                if layer_num >= len(model.layers)-5:
-                    break
-                weights_obj = weights_file['layer_{}'.format(layer_num)]
+            new_conv_count = 1
+            for layer_name, layer_idx in zip(classwise_model_layer_names, 
+                                            range(weights_file.attrs['nb_layers'])):
+                print 'Loading weights for layer {}'.format(layer_idx)
+                weights_obj = weights_file['layer_{}'.format(layer_idx)]
                 weights = [weights_obj['param_{}'.format(p)]
                            for p in range(weights_obj.attrs['nb_params'])]
-                model.layers[layer_num].set_weights(weights)
+                if layer_idx >= (behead_idx):
+                    if layer_name == 'Dense':
+                        newshape_weights = []
+                        # new_layer_inshape = classwise_model_structure.layers[layer_idx-2].get_weights()[0].shape
+                        # new_layer_outshape = classwise_model_structure.layers[layer_idx-2].get_weights()[1].shape
+                        if new_conv_count == 1:
+                            print 'Loading weights onto the new head...'
+                            print '...for first fully convolutional layer...'
+                            newshape_weights += [model.layers[layer_idx-2].get_weights()[0]]
+                            newshape_weights += [weights[1].value]
+                            weights = newshape_weights
+                            model.layers[layer_idx-2].set_weights(weights)
+                        # new_layer_inshape = model.layers[layer_idx-2].get_weights()[0].shape
+                        # new_layer_outshape = model.layers[layer_idx-2].get_weights()[1].shape
+                        # ^ idx-2 because we've cut the flatten and dropout layers...
+                        elif new_conv_count == 2:
+                            print '...for second fully convolutional layer...'
+                            newshape_weights += [weights[0].value.reshape(128,128,1,1)]
+                            newshape_weights += [weights[1].value]
+                            weights = newshape_weights
+                            model.layers[layer_idx-2].set_weights(weights)
+                        elif new_conv_count == 3:
+                            print '...for final fully convolutional layer...'
+                            final_conv_weights_in = np.zeros((4, 128, 1, 1))# np.zeros(new_layer_inshape)
+                            final_conv_weights_out = np.zeros(4) #np.zeros(new_layer_outshape)
+                            classifier_weights_in = weights[0].value.T
+                            classifier_weights_out = weights[1].value
+                            classifier_weights_in = classifier_weights_in.reshape(
+                                                    3, 128, 1, 1)
+                            final_conv_weights_in[:self.n_classes_no_background, :, :, ] = (
+                                        classifier_weights_in)
+                            final_conv_weights_out[:self.n_classes_no_background] = (
+                                        classifier_weights_out)
+                            weights = [final_conv_weights_in, final_conv_weights_out]
+                            model.layers[-3].set_weights(weights)
+
+                        new_conv_count += 1
+                    else:
+                        pass
             weights_file.close()
         elif untilflatten_or_all == 'all':
             model = model_from_json(open(json_file_name).read())
             model.load_weights(weights_file_name)
-        sgd = SGD(lr=0.1, decay=2e-4, momentum=0.9, nesterov=True)
-        model.compile(loss='categorical_crossentropy', optimizer=sgd)
+        # sgd = SGD(lr=0.1, decay=2e-4, momentum=0.9, nesterov=True)
+        model.compile(loss='categorical_crossentropy', optimizer='adadelta')
         print 'Done loading model weights.'
         return model
 
@@ -428,7 +472,7 @@ class KerasModels(object):
                         nb_epoch=self.n_epoch,
                         callbacks=[early_stopping_monitor],
                         show_accuracy=True, verbose=1,
-                        validation_split=0.166)
+                        validation_split=0.1)
         print hist.history
         stop = time.clock()
         print 'Done.'
@@ -469,7 +513,6 @@ class KerasModels(object):
 
 
     def pixelwise_prediction(self, model, X_test_img_filename, y_test_img_filename):
-        # offset = int(sub_im_width/2.)
         X_test_img = imread(X_test_img_filename)
         y_test_img = imread(y_test_img_filename)
         y_pred_img = np.zeros((self.true_imwidth, self.true_imwidth, 3))
@@ -525,10 +568,33 @@ class KerasModels(object):
         return activations
 
 
+    def show_me_centerpix_img(X, y, class_idx, show=False, save=False):
+        ''' Assuming y is categorical'''
+        fig = plt.figure(figsize=(10, 10))
+        outer_grid = gridspec.GridSpec(10, 10, wspace=0.0, hspace=0.0)
+        pylab.xticks([])
+        pylab.yticks([])
+        def plotcmd(ax, img):
+            ax.set_xticklabels([])
+            ax.set_yticklabels([])
+            ax.set_xticks([])
+            ax.set_yticks([])
+            plt.imshow(img)
+        class_locs = np.where(y[:, class_idx]==1)[0]
+        imgs = X[class_locs][:100]
+        for idx, img in enumerate(imgs):
+            ax = plt.Subplot(fig, outer_grid[idx])
+            plotcmd(ax, img)
+            fig.add_subplot(ax)
+        if show:
+            plt.show()
+        if save:
+            plt.savefig('Class_{}_ex.png'.format(class_idx), dpi=150)
+
 
 def run_centerpix_defined_model(data_folder, name_append):
-    km = KerasModels(n_epoch=10, sub_im_width=64, batch_size=32, n_classes=4,
-                      h=620, sample_stride=20, n_conv_nodes=128, n_dense_nodes=128)
+    km = KerasModels(n_epoch=10, sub_im_width=64, batch_size=64, n_classes=4,
+                      h=620, sample_stride=24, n_conv_nodes=128, n_dense_nodes=128)
     X, y = km.load_data(data_folder, equal_classes=True,
                         centerpix_or_pixelwise='centerpix')
     name_to_append = 'centerpix_{}'.format(name_append)
@@ -538,19 +604,20 @@ def run_centerpix_defined_model(data_folder, name_append):
 
 
 def run_pixelwise_defined_model(data_folder, path_to_centerpix_model, name_append):
-    km = KerasModels(n_epoch=10, sub_im_width=64, batch_size=64, n_classes=4,
+    km = KerasModels(n_epoch=16, sub_im_width=64, batch_size=64, n_classes=4,
                       sample_stride=64, n_conv_nodes=128, n_dense_nodes=128)
-    X_segmented, y_segmented = km.load_data(data_folder, equal_classes=True,
+    X_segmented, y_segmented = km.load_data(data_folder, equal_classes=False,
                                             centerpix_or_pixelwise='pixelwise')
     segmented_model = km.load_model_weights(path_to_centerpix_model, 
                                             untilflatten_or_all='untilflatten')
     name_to_append = 'pixelwise_{}'.format(name_append)
+    print name_append
     segmented_model, path_to_pixelwise_model = km.fit_and_save_model(segmented_model, 
                                                                      name_to_append,
                                                                      X_segmented, 
                                                                      y_segmented) 
     return X_segmented, y_segmented, segmented_model
-    pixelwise_prediction(segmented_model, 'data640x640zoom18/lat_28.48830,long_-81.5087_satellite.png', 'data640x640zoom18/lat_28.48830,long_-81.5087_segmented.png')
+    # pixelwise_prediction(segmented_model, 'data640x640zoom18/lat_28.48830,long_-81.5087_satellite.png', 'data640x640zoom18/lat_28.48830,long_-81.5087_segmented.png')
 
 
 def load_model_and_make_pred():
@@ -566,9 +633,10 @@ def load_model_and_make_pred():
 
 if __name__ == '__main__':
     data_folder = 'data640x640newColzoom18'
-    # name_append = '2xoversampled_nobatchnorm_32batch_c163264128128d128_pooling'#_zeroinit'
-    name_append = 'oversampled_no12811_equalerclasses_sgd'
+    # name_append = 'nobatchnorm_64batch_c163264128128d128128'#_zeroinit'
+    name_append = 'with12811_12811_adadelta_allweightsloaded_justpembroke'
+    path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_nobatchnorm_64batch_c163264128128d128128'
     # path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_{}'.format(name_append)
-    path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_2xoversampled_nobatchnorm_32batch_c163264128d128'
+    # path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_2xoversampled_nobatchnorm_32batch_c163264128d128_withdropout'
     # X, y, model, path_to_centerpix_model = run_centerpix_defined_model(data_folder, name_append)
     X_seg, y_seg, seg_model = run_pixelwise_defined_model(data_folder, path_to_centerpix_model, name_append)
