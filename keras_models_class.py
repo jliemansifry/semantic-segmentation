@@ -18,6 +18,8 @@ import pylab
 from keras.callbacks import EarlyStopping
 import theano
 import pickle
+import theano.tensor as T
+import theano
 
 
 class KerasModels(object):
@@ -322,6 +324,10 @@ class KerasModels(object):
                             LeakyReLU(alpha=0.01),
                             # BatchNormalization(),
                             # MaxPooling2D(pool_size=(self.pool_size, self.pool_size)),
+                            # Convolution2D(self.n_conv_nodes,
+                                          # 1,
+                                          # 1),
+                            # LeakyReLU(alpha=0.01),
                             Dropout(self.primary_dropout),
                             Flatten(),
                             Dense(self.n_dense_nodes),
@@ -383,7 +389,9 @@ class KerasModels(object):
         return model
 
    
-    def load_model_weights(self, path_to_model, untilflatten_or_all):
+    def load_model_weights(self, path_to_model, untilflatten_or_all, 
+                           load_head_weights=False,
+                           use_custom_loss=False):
         ''' 
         INPUT:  (1) String: The path to the saved model architecture and weights, 
                     not including .json or .h5 at the end
@@ -405,55 +413,72 @@ class KerasModels(object):
             behead_idx = self.find_behead_idx(classwise_model_layer_names)
             beheaded_classwise_model_layers = classwise_model_structure.layers[:behead_idx]
             pixelwise_model = self.add_pixelwise_head(beheaded_classwise_model_layers)
-            new_conv_count = 1
-            for layer_name, classwise_layer_idx in zip(classwise_model_layer_names, 
-                                                    range(classwise_num_layers)):
-                print 'Loading weights from layer {}'.format(classwise_layer_idx)
-                weights_obj = weights_file['layer_{}'.format(classwise_layer_idx)]
-                weights = [weights_obj['param_{}'.format(p)]
-                           for p in range(weights_obj.attrs['nb_params'])]
-                if classwise_layer_idx >= (behead_idx):
-                    if layer_name == 'Dense':
-                        # newshape_weights = []
-                        # new_layer_inshape = classwise_model_structure.layers[classwise_layer_idx-2].get_weights()[0].shape
-                        # new_layer_outshape = classwise_model_structure.layers[classwise_layer_idx-2].get_weights()[1].shape
-                        if new_conv_count == 1:
-                            print 'Loading weights onto the new head...'
-                            continue
-                            print '...not for first fully convolutional layer...'
-                            # classwise_as_pixelwise_weights_in = pixelwise_model.layers[classwise_layer_idx-2].get_weights()[0]
-                            # classwise_as_pixelwise_weights_out = weights[1].value
-                            # weights = [classwise_as_pixelwise_weights_in, classwise_as_pixelwise_weights_out]
-                            # pixelwise_model.layers[classwise_layer_idx-2].set_weights(weights)
-                            # ^ idx-2 because we've cut the flatten and dropout layers...
-                        elif new_conv_count == 2:
-                            print '...for second fully convolutional layer...'
-                            classwise_as_pixelwise_weights_in = weights[0].value.reshape(128,128,1,1)
-                            classwise_as_pixelwise_weights_out = weights[1].value
-                            weights = [classwise_as_pixelwise_weights_in, classwise_as_pixelwise_weights_out]
-                            pixelwise_model.layers[classwise_layer_idx-2].set_weights(weights)
-                        elif new_conv_count == 3:
-                            print '...for final fully convolutional layer...'
-                            final_conv_weights_in = np.zeros((4, 128, 1, 1))# np.zeros(new_layer_inshape)
-                            final_conv_weights_out = np.zeros(4) #np.zeros(new_layer_outshape)
-                            classifier_weights_in = weights[0].value.T.reshape(3, 128, 1, 1)
-                            classifier_weights_out = weights[1].value
-                            final_conv_weights_in[:self.n_classes_no_background, :, :, ] = (
-                                        classifier_weights_in)
-                            final_conv_weights_out[:self.n_classes_no_background] = (
-                                        classifier_weights_out)
-                            weights = [final_conv_weights_in, final_conv_weights_out]
-                            pixelwise_model.layers[-3].set_weights(weights)
-                        new_conv_count += 1
-                    else:
-                        pass
+            if load_head_weights:
+                new_conv_count = 1
+                for layer_name, classwise_layer_idx in zip(classwise_model_layer_names, 
+                                                        range(classwise_num_layers)):
+                    print 'Loading weights from layer {}'.format(classwise_layer_idx)
+                    weights_obj = weights_file['layer_{}'.format(classwise_layer_idx)]
+                    weights = [weights_obj['param_{}'.format(p)]
+                            for p in range(weights_obj.attrs['nb_params'])]
+                    if classwise_layer_idx >= (behead_idx):
+                        if layer_name == 'Dense':
+                            # newshape_weights = []
+                            # new_layer_inshape = classwise_model_structure.layers[classwise_layer_idx-2].get_weights()[0].shape
+                            # new_layer_outshape = classwise_model_structure.layers[classwise_layer_idx-2].get_weights()[1].shape
+                            if new_conv_count == 1:
+                                print 'Loading weights onto the new head...'
+                                continue
+                                print '...not for first fully convolutional layer...'
+                                # classwise_as_pixelwise_weights_in = pixelwise_model.layers[classwise_layer_idx-2].get_weights()[0]
+                                # classwise_as_pixelwise_weights_out = weights[1].value
+                                # weights = [classwise_as_pixelwise_weights_in, classwise_as_pixelwise_weights_out]
+                                # pixelwise_model.layers[classwise_layer_idx-2].set_weights(weights)
+                                # ^ idx-2 because we've cut the flatten and dropout layers...
+                            elif new_conv_count == 2:
+                                print '...for second fully convolutional layer...'
+                                classwise_as_pixelwise_weights_in = weights[0].value.reshape(128,128,1,1)
+                                classwise_as_pixelwise_weights_out = weights[1].value
+                                weights = [classwise_as_pixelwise_weights_in, classwise_as_pixelwise_weights_out]
+                                pixelwise_model.layers[classwise_layer_idx-2].set_weights(weights)
+                            elif new_conv_count == 3:
+                                print '...for final fully convolutional layer...'
+                                final_conv_weights_in = np.zeros((4, 128, 1, 1))# np.zeros(new_layer_inshape)
+                                final_conv_weights_out = np.zeros(4) #np.zeros(new_layer_outshape)
+                                classifier_weights_in = weights[0].value.T.reshape(3, 128, 1, 1)
+                                classifier_weights_out = weights[1].value
+                                final_conv_weights_in[:self.n_classes_no_background, :, :, ] = (
+                                            classifier_weights_in)
+                                final_conv_weights_out[:self.n_classes_no_background] = (
+                                            classifier_weights_out)
+                                weights = [final_conv_weights_in, final_conv_weights_out]
+                                pixelwise_model.layers[-3].set_weights(weights)
+                            new_conv_count += 1
+                        else:
+                            pass
             model = pixelwise_model 
             weights_file.close()
         elif untilflatten_or_all == 'all':
             model = model_from_json(open(json_file_name).read())
             model.load_weights(weights_file_name)
         # sgd = SGD(lr=0.1, decay=2e-4, momentum=0.9, nesterov=True)
-        model.compile(loss='categorical_crossentropy', optimizer='adadelta')
+        def custom_loss(y_true, y_pred):
+            '''Just another crossentropy'''
+            eqs = T.eq(y_true, 1)
+            correct_locs = eqs.nonzero()[1]
+            arr = T.ivector()
+            f = theano.function([arr], correct_locs)
+            print correct_locs
+            y_pred = f(y_pred)
+            y_true = f(y_true)
+            # y_pred = T.clip(y_pred, epsilon, 1.0 - epsilon)
+            # y_pred /= y_pred.sum(axis=-1, keepdims=True)
+            cce = T.nnet.categorical_crossentropy(y_pred, y_true)
+            return cce
+        if use_custom_loss:
+            model.compile(loss=custom_loss, optimizer='adadelta')
+        else:
+            model.compile(loss='categorical_crossentropy', optimizer='adadelta')
         print 'Done loading model weights.'
         return model
 
@@ -609,12 +634,14 @@ def run_pixelwise_defined_model(data_folder, path_to_centerpix_model, name_appen
     X_segmented, y_segmented = km.load_data(data_folder, equal_classes=False,
                                             centerpix_or_pixelwise='pixelwise')
     segmented_model = km.load_model_weights(path_to_centerpix_model, 
-                                            untilflatten_or_all='untilflatten')
+                                            untilflatten_or_all='untilflatten',
+                                            load_head_weights=False,
+                                            use_custom_loss=True)
     name_to_append = 'pixelwise_{}'.format(name_append)
-    # segmented_model, path_to_pixelwise_model = km.fit_and_save_model(segmented_model, 
-                                                                     # name_to_append,
-                                                                     # X_segmented, 
-                                                                     # y_segmented) 
+    segmented_model, path_to_pixelwise_model = km.fit_and_save_model(segmented_model, 
+                                                                     name_to_append,
+                                                                     X_segmented, 
+                                                                     y_segmented) 
     return X_segmented, y_segmented, segmented_model
     # pixelwise_prediction(segmented_model, 'data640x640zoom18/lat_28.48830,long_-81.5087_satellite.png', 'data640x640zoom18/lat_28.48830,long_-81.5087_segmented.png')
 
@@ -632,8 +659,8 @@ def load_model_and_make_pred():
 
 if __name__ == '__main__':
     data_folder = 'data640x640new2Colzoom18'
-    # name_append = 'nobatchnorm_64batch_c163264128128d128128'#_zeroinit'
-    name_append = 'with12811_12811_adadelta_allweightsloaded_justpembroke'
+    # name_append = 'nobatchnorm_64batch_c163264128128_d128128'#_zeroinit'
+    name_append = 'with12811_12811_adadelta_noheadweightsloaded_justPembroke'
     path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_nobatchnorm_64batch_c163264128128d128128'
     # path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_{}'.format(name_append)
     # path_to_centerpix_model = 'models/KerasBaseModel_v.0.2_centerpix_2xoversampled_nobatchnorm_32batch_c163264128d128_withdropout'
